@@ -13,20 +13,13 @@ ARG VERSION
 ENV REPO=${REPO}
 ENV VERSION=${VERSION}
 
-# Workaround for RISC-V, specific kernel might be needed for some boards
-ARG ADD_REPO
-ENV ADD_REPO=${ADD_REPO}
-
 # Install kernel, systemd, dracut, grub2 and other required tools
 RUN ARCH=$(uname -m); \
-    zypper --non-interactive removerepo repo-update || true; \
-    if [[ -n "${ADD_REPO}" ]]; then \
-      zypper --non-interactive addrepo --enable --refresh ${ADD_REPO} added-repo; \
-    fi; \
     if [[ "${ARCH}" != "riscv64" ]]; then \
       ADD_PKGS+=" shim"; \
       [[ "${ARCH}" == "aarch64" ]] && ARCH="arm64"; \
     fi; \
+    zypper --non-interactive removerepo repo-update || true; \
     zypper --non-interactive --gpg-auto-import-keys install --no-recommends -- \
       kernel-default \
       device-mapper \
@@ -87,15 +80,35 @@ RUN echo "PermitRootLogin yes" > /etc/ssh/sshd_config.d/rootlogin.conf
 # Add default snapshotter setup
 ADD snapshotter.yaml /etc/elemental/config.d/snapshotter.yaml
 
+# Add specific Grub bootargs for RISC-V
+ADD riscv_bootargs.cfg /tmp/riscv_bootargs.cfg
+RUN ARCH=$(uname -m); \
+    [[ "${ARCH}" == "riscv64" ]] && mv -f /tmp/riscv_bootargs.cfg /etc/elemental/bootargs.cfg || true
+
 # Generate initrd with required elemental services
-RUN elemental --debug init --force
+RUN ARCH=$(uname -m); \
+    if [[ "${ARCH}" != "riscv64" ]]; then \
+      ADD_FEATURES+=" grub-default-bootargs"; \
+      [[ "${ARCH}" == "aarch64" ]] && ADD_FEATURES+=" arm-firmware"; \
+    fi; \
+    elemental --debug init --force \
+      elemental-rootfs \
+      elemental-sysroot \
+      grub-config \
+      elemental-setup \
+      dracut-config \
+      cloud-config-defaults \
+      cloud-config-essentials \
+      boot-assessment \
+      autologin \
+      ${ADD_FEATURES}
 
 # Update os-release file with some metadata
-RUN echo IMAGE_REPO=\"${REPO}\"         >> /etc/os-release && \
+RUN echo IMAGE_REPO=\"${REPO}\"             >> /etc/os-release && \
     echo IMAGE_TAG=\"${VERSION}\"           >> /etc/os-release && \
-    echo IMAGE=\"${REPO}:${VERSION}\" >> /etc/os-release && \
+    echo IMAGE=\"${REPO}:${VERSION}\"       >> /etc/os-release && \
     echo TIMESTAMP="`date +'%Y%m%d%H%M%S'`" >> /etc/os-release && \
-    echo GRUB_ENTRY_NAME=\"Elemental\" >> /etc/os-release
+    echo GRUB_ENTRY_NAME=\"Elemental\"      >> /etc/os-release
 
 # Good for validation after the build
 CMD ["/bin/bash"]
